@@ -485,3 +485,34 @@ def all_check(bunker: str, end: int, his_start: int,
         return main()
     finally:
         _sys.argv = old_argv
+
+
+def load_factor_table(csv_path: str):
+    """读取 FR 导出的因子参数表（FR_DUMP_FACTORS）。"""
+    import csv
+    rows = []
+    try:
+        with open(csv_path) as f:
+            for r in csv.DictReader(f):
+                rows.append(r)
+    except Exception:
+        return {}
+    return {r["factor_name"]: r for r in rows}
+
+
+def suggest_long_total_bar(table, limits=None):
+    """按 total_bar 推导每个因子应属的 long_total_bar 档位。"""
+    limits = limits or cfg.LONG_TOTAL_LIMIT
+    out = {}
+    for name, r in table.items():
+        try:
+            t = int(r.get("total_bar", 0))
+        except Exception:
+            continue
+        lv = None
+        for k in sorted(limits):
+            if t <= limits[k]:
+                lv = k
+                break
+        out[name] = lv
+    return out
