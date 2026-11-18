@@ -3,20 +3,25 @@
 """qc_main.py —— 因子质检总入口（对齐老平台 check_future_main.py 的参数面）
 
 用法：
-  qc_main.py --bunker <目录> --end 20190131 --his-start 20181201 \
-             --freq 1min --period normal --f-list f0,f1,f2,f4 \
+  # both：长 his + FR 原生 daily 单日
+  qc_main.py --bunker <目录> --end 20221230 --his-start 20220104 \
+             --mode both --freq 1min --period normal --f-list f0,f1 \
              --long-total-bar 0 --tstd-bar-num 12000 --out /tmp/qc_out
+
+  # daily：只跑 FR 原生 daily（区间 [end,end]，平台自动前摇），不需要 his_start
+  qc_main.py --bunker <目录> --end 20221230 --mode daily --out /tmp/qc_daily
 
 流程（对应老平台）：
   ① 读 bunker → 因子清单            （≈ csv_file）
   ② 校验因子名与 tstd_bar_num 档位  （≈ check_csv_file）
-  ③ 生成 his / daily 配置并回放      （≈ generate_config + generate_factor）
+  ③ 按 --mode 生成 his / daily 配置并回放（≈ generate_config + generate_factor）
   ④ 逐因子逐版本做检查               （≈ check_factor）
   ⑤ 汇总 Excel（5 个 sheet）         （≈ all_check）
 
 重点检查：daily_his_corr —— 老平台的核心判据
-    outer merge(factor_daily, factor_his, on=['code','time']) 后取两列的 Pearson，
+    daily 与 his 先裁到同一时间范围，outer merge 后取两列的 Pearson，
     阈值 > 0.9999。它与「逐点完全相等」不同：容许极小的整体漂移。
+    daily 用 FR 原生 daily：每个目标日 reset 因子状态、平台自动前摇。
 """
 from __future__ import annotations
 
@@ -129,15 +134,17 @@ def check_csv_like(names: list[str], tstd_bar_num: int) -> list[str]:
     return bad
 
 
-def make_cfg(out_dir: str, start: int, end: int, bunker: str) -> str:
+def make_cfg(out_dir: str, start: int, end: int, bunker: str,
+             mode: str = "his") -> str:
     start, end = first_trading_day(start), first_trading_day(end)
     c = json.load(open(BASE_CFG))
+    c["replay"]["mode"] = mode
     c["replay"]["replay_start_date"] = start
     c["replay"]["replaydate"] = end
     c["factor"]["factor_export"] = out_dir.rstrip("/") + "/"
-    c["factor"]["factor_bunker"] = bunker
+    c["factor"]["factor_bunker"] = bunker.rstrip("/") + "/"
     os.makedirs(out_dir, exist_ok=True)
-    p = os.path.join(FR_BIN_DIR, f"config_qcm_{start}_{end}.json")
+    p = os.path.join(FR_BIN_DIR, f"config_qcm_{mode}_{start}_{end}.json")
     json.dump(c, open(p, "w"), indent=2)
     return p
 
@@ -201,12 +208,25 @@ def cal_hf_series(series: pd.Series, param: int, period: str) -> float:
     return float(round(n * scale))
 
 
+def clip_his_to_daily(daily: pd.DataFrame, his: pd.DataFrame) -> pd.DataFrame:
+    """把 his 裁到 daily 的时间范围（老平台 check_factor 的口径）。"""
+    if daily.empty or his.empty:
+        return his.iloc[0:0]
+    t0, t1 = daily["timestamp"].min(), daily["timestamp"].max()
+    return his[(his["timestamp"] >= t0) & (his["timestamp"] <= t1)]
+
+
 def daily_his_corr(daily: pd.DataFrame, his: pd.DataFrame) -> float:
     """老平台的核心判据：outer merge 后两列的 Pearson 相关。
 
     与「逐点完全相等」不同：容许整体一致、少量偏差。
+    his 先裁到 daily 的时间范围，避免 daily 单日运行时把 his 多出来的
+    交易日全部算成「一侧 NaN」。
     """
     if daily.empty or his.empty:
+        return np.nan
+    his = clip_his_to_daily(daily, his)
+    if his.empty:
         return np.nan
     m = pd.merge(daily, his, how="outer", on=["timestamp", "instrumentID"],
                  suffixes=("_d", "_h"))
@@ -227,8 +247,9 @@ def daily_his_corr(daily: pd.DataFrame, his: pd.DataFrame) -> float:
 # 单因子检查
 # ─────────────────────────────────────────────────────────────
 def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
-                 period: str, long_total_bar: int, tstd_bar_num: int) -> dict:
-    r = {"factorName": name, "变体": variant_of(name),
+                 period: str, long_total_bar: int, tstd_bar_num: int,
+                 mode: str = "both") -> dict:
+    r = {"factorName": name, "变体": variant_of(name), "qc_mode": mode,
          "max_bar": parse_max_bar(name), "tsstd": 0, "条数": 0,
          "nan_ratio": np.nan, "inf_num": np.nan, "min": np.nan, "max": np.nan,
          "hf": np.nan, "hf_ratio": np.nan, "daily_his_corr": np.nan,
@@ -266,9 +287,10 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
         r["min"] = float(fin.min())
         r["max"] = float(fin.max())
 
-    # ── hf ──
+    # ── hf（老平台口径：用 daily；daily 缺失才退回 his）──
+    hf_src = daily if not daily.empty else his
     hfs = [cal_hf_series(g["value"].astype(float), r["max_bar"], period)
-           for _c, g in base.groupby("instrumentID", sort=False)]
+           for _c, g in hf_src.groupby("instrumentID", sort=False)]
     hfs = [h for h in hfs if not np.isnan(h)]
     if hfs:
         r["hf"] = float(np.mean(hfs))
@@ -278,7 +300,8 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
     # ── daily_his_corr（核心）──
     r["daily_his_corr"] = daily_his_corr(daily, his)
     if not daily.empty and not his.empty:
-        m = pd.merge(daily, his, how="outer", on=["timestamp", "instrumentID"],
+        hs = clip_his_to_daily(daily, his)
+        m = pd.merge(daily, hs, how="outer", on=["timestamp", "instrumentID"],
                      suffixes=("_d", "_h"))
         if len(m):
             a, b = m["value_d"].to_numpy(float), m["value_h"].to_numpy(float)
@@ -319,7 +342,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bunker", required=True)
     ap.add_argument("--end", type=int, required=True)
-    ap.add_argument("--his-start", type=int, required=True)
+    ap.add_argument("--his-start", type=int, default=None,
+                    help="his 模式起点；--mode daily 时可省略")
+    ap.add_argument("--mode", default="both", choices=["both", "his", "daily"],
+                    help="both=his+daily；his=只跑长回放；daily=只跑 FR daily 单日")
     ap.add_argument("--freq", default="1min", choices=["1min", "0d5s"])
     ap.add_argument("--period", default="normal", choices=["normal", "tick"])
     ap.add_argument("--f-list", default="f0,f1,f2,f4")
@@ -331,13 +357,18 @@ def main():
     ap.add_argument("--pool", type=int, default=1)
     a = ap.parse_args()
 
+    if a.mode in ("both", "his") and a.his_start is None:
+        ap.error("--mode his/both 需要 --his-start")
+
     f_list = [x.strip() for x in a.f_list.split(",") if x.strip()]
     os.makedirs(a.out, exist_ok=True)
     his_dir, day_dir = os.path.join(a.out, "his"), os.path.join(a.out, "daily")
+    want_his = a.mode in ("both", "his")
+    want_daily = a.mode in ("both", "daily")
 
     # ① 因子清单
     names = load_bunker(a.bunker)
-    print(f"[1/5] bunker 因子数: {len(names)}")
+    print(f"[1/5] bunker 因子数: {len(names)}  mode={a.mode}")
 
     # ② 清单校验（≈ check_csv_file）
     bad = check_csv_like(names, a.tstd_bar_num)
@@ -346,20 +377,29 @@ def main():
 
     # ③ 回放
     if not a.skip_run:
-        print("[2/5] his 回放 ...")
-        print("  rc =", run_replay(make_cfg(his_dir, a.his_start, a.end, a.bunker),
-                                  os.path.join(a.out, "his.log")))
-        print("[3/5] daily 回放 ...")
-        print("  rc =", run_replay(make_cfg(day_dir, max(a.his_start, a.end - 300), a.end, a.bunker),
-                                  os.path.join(a.out, "daily.log")))
+        if want_his:
+            print("[2/5] his 回放 ...")
+            print("  rc =", run_replay(
+                make_cfg(his_dir, a.his_start, a.end, a.bunker, "his"),
+                os.path.join(a.out, "his.log")))
+        else:
+            print("[2/5] his 跳过（mode=daily）")
+        if want_daily:
+            print("[3/5] daily 回放（FR mode=daily，单日）...")
+            print("  rc =", run_replay(
+                make_cfg(day_dir, a.end, a.end, a.bunker, "daily"),
+                os.path.join(a.out, "daily.log")))
+        else:
+            print("[3/5] daily 跳过（mode=his）")
     else:
         print("[2/5][3/5] 跳过回放")
 
     # ④ 载入（只读 end 前 5 天，控制内存）
     d0 = str(pd.Timestamp(str(a.end)).normalize() - pd.Timedelta(days=5))[:10].replace("-", "")
     today = str(a.end)
-    his_all = load_days(his_dir, d0, today)
-    day_all = load_days(day_dir, d0, today)
+    empty = pd.DataFrame(columns=["timestamp", "instrumentID", "factorName", "value"])
+    his_all = load_days(his_dir, d0, today) if want_his else empty
+    day_all = load_days(day_dir, d0, today) if want_daily else empty
     print(f"[4/5] 载入 his {len(his_all):,} 行 / daily {len(day_all):,} 行")
 
     his_by = dict(tuple(his_all.groupby("factorName"))) if len(his_all) else {}
@@ -374,9 +414,10 @@ def main():
             if n not in his_by and n not in day_by:
                 missing.append(n)
                 continue
-            rows.append(check_factor(n, his_by.get(n, pd.DataFrame()),
-                                     day_by.get(n, pd.DataFrame()),
-                                     a.period, a.long_total_bar, a.tstd_bar_num))
+            rows.append(check_factor(n, his_by.get(n, empty),
+                                     day_by.get(n, empty),
+                                     a.period, a.long_total_bar, a.tstd_bar_num,
+                                     mode=a.mode))
 
     # ④b 因子性质统计 + 相关性去冗余（对齐老「计算因子性质脚本」）
     props_rows, aligned = [], {}
@@ -384,6 +425,8 @@ def main():
     for r in rows:
         n = r["factorName"]
         d = his_by.get(n)
+        if d is None or d.empty:
+            d = day_by.get(n)          # 单 daily 模式：性质统计退回 daily
         if d is None or d.empty:
             continue
         pr = props.factor_props(d, r["变体"])
@@ -415,16 +458,20 @@ def main():
 
     xlsx = os.path.join(a.out, "qc_report.xlsx")
     with pd.ExcelWriter(xlsx) as w:
-        for st, sheet in (("pass", "pass"), ("fail", "fail"),
-                          ("load_error", "load_error"),
-                          ("wrong_long_total_bar_error", "wrong_long_total_bar")):
-            sub = rep[rep["status"] == st] if len(rep) else rep
-            if len(sub):
-                sub.to_excel(w, sheet_name=sheet, index=False)
+        if len(rep):
+            for st, sheet in (("pass", "pass"), ("fail", "fail"),
+                              ("load_error", "load_error"),
+                              ("wrong_long_total_bar_error", "wrong_long_total_bar")):
+                sub = rep[rep["status"] == st]
+                if len(sub):
+                    sub.to_excel(w, sheet_name=sheet, index=False)
+            rep.to_excel(w, sheet_name="all", index=False)
+        else:
+            # ExcelWriter 至少要有一个 sheet
+            pd.DataFrame(columns=["factorName", "status", "reason", "qc_mode"]).to_excel(
+                w, sheet_name="all", index=False)
         if missing:
             pd.DataFrame({"factorName": missing}).to_excel(w, sheet_name="missing_factor", index=False)
-        if len(rep):
-            rep.to_excel(w, sheet_name="all", index=False)
         if props_rows:
             pd.DataFrame(props_rows).to_excel(w, sheet_name="properties", index=False)
     print("报告:", xlsx)
@@ -446,16 +493,19 @@ if __name__ == "__main__":
 # ─────────────────────────────────────────────────────────────
 # 公共 API（供 main.py 与外部脚本调用）
 # ─────────────────────────────────────────────────────────────
-def all_check(bunker: str, end: int, his_start: int,
+def all_check(bunker: str, end: int, his_start: int | None = None,
               f_list=None, freq: str = "1min", period: str = "normal",
               long_total_bar: int = -1, tstd_bar_num: int = 12000,
-              out_dir: str = ".", skip_run: bool = False, pool: int = 1):
+              out_dir: str = ".", skip_run: bool = False, pool: int = 1,
+              mode: str = "both"):
     """因子质检总入口。
 
     参数与老平台 check_future_main.py 对齐：
         bunker        因子清单目录（含 StrategySignal.json）
         end           回放结束日（也是比对日）
-        his_start     his 模式起点（用于长预热）
+        his_start     his 模式起点（mode=his/both 必填）
+        mode          both / his / daily
+                      daily = FR 原生 daily：区间 [end,end]，平台自动前摇，只导出 end
         f_list        要质检的版本列表，如 ['f0','f1','f2','f4']
         freq          '1min' or '0d5s'
         period        'normal' or 'tick'
@@ -469,13 +519,15 @@ def all_check(bunker: str, end: int, his_start: int,
     argv = ["qc_main",
             "--bunker", str(bunker),
             "--end", str(end),
-            "--his-start", str(his_start),
             "--out", str(out_dir),
+            "--mode", str(mode),
             "--freq", str(freq),
             "--period", str(period),
             "--long-total-bar", str(long_total_bar),
             "--tstd-bar-num", str(tstd_bar_num),
             "--f-list", ",".join(f_list) if f_list else "f0,f1"]
+    if his_start is not None:
+        argv += ["--his-start", str(his_start)]
     if skip_run:
         argv.append("--skip-run")
 

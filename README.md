@@ -12,11 +12,29 @@ FactorQC/
     __init__.py      对外 API（import funcs as qc）
     cfg.py           路径与环境变量（唯一硬编码处，可覆盖）
     core.py          总流程：读 bunker → 调 FR → 检查 → 汇总 → Excel
-    checks.py        单份数据体检（nan/inf/min-max/dup/hf/long_total_bar）
     props.py         因子性质（偏度/峰度/大跳/众数）+ 阈值判定
-    driver.py        his/daily 双跑与逐点比对
     accel.py         numba 加速（不可用时自动退回 numpy）
+    checks.py        旧版单份数据体检（保留参考，core 未引用）
+    driver.py        旧版 his/daily 双跑（保留参考，core 未引用）
 ```
+
+## 三种模式
+
+`--mode` 控制回放，不再无条件跑两次独立回放：
+
+| mode | his 回放 | daily 回放 | 用途 |
+|---|---|---|---|
+| `both`（默认） | `mode=his`，`[his_start, end]` | `mode=daily`，`[end, end]` | max_bar 对比（生产用） |
+| `his` | `mode=his`，`[his_start, end]` | 跳过 | 只看长历史 |
+| `daily` | 跳过 | `mode=daily`，`[end, end]` | 日更单日体检，不需要 his_start |
+
+`daily` 使用 FR 原生 daily 语义：平台按 `max_bar + 2*tsstd_bar` 自动前摇
+（本样本 12015 → `replay_days=108`，含目标日），每个目标日 reset 因子状态，
+只导出目标日。不再用「短窗口 his」冒充 daily。
+
+比对口径：`daily_his_corr` / NaN 不一致前，his 会先裁到 daily 的时间范围
+（老平台 `check_factor` 的做法），避免 daily 单日运行时把 his 多出来的交易日
+全部算成「一侧 NaN」。
 
 ## 用法
 
@@ -26,18 +44,20 @@ import funcs as qc
 
 qc.all_check(bunker='/path/to/bunker',
              end=20221230, his_start=20220104,
+             mode='both',                 # both / his / daily
              f_list=['f0', 'f1'],
              out_dir='/tmp/qc_out')
 ```
 
 ```bash
 python main.py
-```
 
-命令行方式（兼容旧用法）：
+# 日更单日体检（不需要 his_start）
+python -m funcs.core --bunker ... --end 20221230 --mode daily --out /tmp/qc_daily
 
-```bash
-python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 --out /tmp/qc_out
+# 复用已有回放数据，只重算报告
+python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
+       --mode both --out /tmp/qc_out --skip-run
 ```
 
 ## 检查项与阈值
@@ -48,10 +68,10 @@ python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 --out /tmp
 | `*_nan_ratio` | < 0.01（排除 SA=141 / PG=131） |
 | `wrong_*_min/max` | f1/f6：±3.01；f2/f4：±6.01 |
 | `no_duplicate` | (合约, 时刻) 不可重复 |
-| `daily_his_corr` | > 0.9999（outer merge 后 Pearson） |
-| `hf` | `floor(param/3) <= hf <= ceil(param*3)` |
+| `daily_his_corr` | > 0.9999（his 裁到 daily 时间范围后 outer merge 的 Pearson） |
+| `hf` | `floor(param/3) <= hf <= ceil(param*3)`；hf 取 daily（无 daily 才退回 his） |
 | `long_total_bar` | bars 不超档位上限（tick ×120） |
-| `check_max_bar_fail` | 首条因子值为 NaN |
+| `check_max_bar_fail` | 当前口径：NaN 不一致 > 0（待真 daily 重跑后校准为 A/B） |
 | `SkewAll` / `KurtAll` | \|skew\|<=3；-1<=kurt<=50 |
 | `big_than6/12/18` | f1→1e-4，f9→1e-5，f8→1e-6，其余→0 |
 

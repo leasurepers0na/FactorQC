@@ -9,6 +9,7 @@ if __name__ == '__main__':
     bunker    = '/home/zugzw4ng/workspace/FactorReplay/config/bunker/f200/'
     end       = 20221230          # 回放结束日（也是比对日）
     his_start = 20220104          # his 起点（长预热）
+    mode      = 'both'            # both / his / daily（daily = FR 原生单日）
     f_list    = ['f0', 'f1']      # 要质检的版本：f0/f1/f2/f4
     freq      = '1min'            # '1min' or '0d5s'
     period    = 'normal'          # 'normal' or 'tick'
@@ -17,6 +18,6 @@ if __name__ == '__main__':
     # =======================  参数配置 END  ===========================
 
     qc.all_check(bunker=bunker, end=end, his_start=his_start,
-                 f_list=f_list, freq=freq, period=period,
+                 f_list=f_list, freq=freq, period=period, mode=mode,
                  out_dir=out_dir, skip_run=skip_run)
     print('Finish.')
