@@ -32,16 +32,18 @@ import sys
 import numpy as np
 import pandas as pd
 
+from . import cfg
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import qc_props
+from . import props
 
 # SYSTEM_BIN：优先使用系统安装版（/usr/local/bin/FactorReplay），
 # 可用环境变量 FR_BIN 覆盖；都找不到才回退到构建目录。
 FR_BIN = os.environ.get("FR_BIN") or shutil.which("FactorReplay") \
     or "/mnt/raid_storage/FactorReplay/build-ms/bin/FactorReplay"
-FR_BIN_DIR = "/mnt/raid_storage/FactorReplay/bin"
+FR_BIN_DIR = cfg.FR_WORKDIR
 BASE_CFG = os.path.join(FR_BIN_DIR, "config_short.json")
-REPLAY_ROOT = "/mnt/raid_storage/CommData/stt_data_v4/clean"
+REPLAY_ROOT = cfg.REPLAY_ROOT
 
 ENV = {
     "LD_LIBRARY_PATH": ("/usr/local/lib:"
@@ -384,11 +386,11 @@ def main():
         d = his_by.get(n)
         if d is None or d.empty:
             continue
-        pr = qc_props.factor_props(d, r["变体"])
+        pr = props.factor_props(d, r["变体"])
         pr["hf"] = r.get("hf")
         pr["factorName"] = n
         pr["变体"] = r["变体"]
-        fails_p = qc_props.judge_props(pr, r["变体"], target_y)
+        fails_p = props.judge_props(pr, r["变体"], target_y)
         pr["性质失败项"] = ",".join(fails_p)
         props_rows.append(pr)
 
@@ -439,3 +441,47 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ─────────────────────────────────────────────────────────────
+# 公共 API（供 main.py 与外部脚本调用）
+# ─────────────────────────────────────────────────────────────
+def all_check(bunker: str, end: int, his_start: int,
+              f_list=None, freq: str = "1min", period: str = "normal",
+              long_total_bar: int = -1, tstd_bar_num: int = 12000,
+              out_dir: str = ".", skip_run: bool = False, pool: int = 1):
+    """因子质检总入口。
+
+    参数与老平台 check_future_main.py 对齐：
+        bunker        因子清单目录（含 StrategySignal.json）
+        end           回放结束日（也是比对日）
+        his_start     his 模式起点（用于长预热）
+        f_list        要质检的版本列表，如 ['f0','f1','f2','f4']
+        freq          '1min' or '0d5s'
+        period        'normal' or 'tick'
+        long_total_bar 长周期档位；-1 表示不检查
+        tstd_bar_num  tsstd 负载档位
+        out_dir       报告输出目录
+        skip_run      True 表示复用已有的 his/daily 数据
+    """
+    import sys as _sys
+
+    argv = ["qc_main",
+            "--bunker", str(bunker),
+            "--end", str(end),
+            "--his-start", str(his_start),
+            "--out", str(out_dir),
+            "--freq", str(freq),
+            "--period", str(period),
+            "--long-total-bar", str(long_total_bar),
+            "--tstd-bar-num", str(tstd_bar_num),
+            "--f-list", ",".join(f_list) if f_list else "f0,f1"]
+    if skip_run:
+        argv.append("--skip-run")
+
+    old_argv = _sys.argv
+    _sys.argv = argv
+    try:
+        return main()
+    finally:
+        _sys.argv = old_argv
