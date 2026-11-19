@@ -81,7 +81,7 @@ python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
 | `daily_his_corr` | > 0.9999（his 裁到 daily 时间范围后 outer merge 的 Pearson） |
 | `hf` | `floor(param/3) <= hf <= ceil(param*3)`；hf 取 daily（无 daily 才退回 his） |
 | `long_total_bar` | bars 不超档位上限（tick ×120） |
-| `check_max_bar_fail` | 当前口径：NaN 不一致 > 0（待真 daily 重跑后校准为 A/B） |
+| `check_max_bar_fail` | NaN 不一致 > 0；真 daily 下 8 个失败且都已在其他项 fail，保持 C |
 | `SkewAll` / `KurtAll` | \|skew\|<=3；-1<=kurt<=50 |
 | `big_than6/12/18` | f1→1e-4，f9→1e-5，f8→1e-6，其余→0 |
 
