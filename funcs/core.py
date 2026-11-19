@@ -294,7 +294,7 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
 
     # ── hf（老平台口径：用 daily；daily 缺失才退回 his）──
     hf_src = daily if not daily.empty else his
-    hfs = [cal_hf_series(g["value"].astype(float), r["max_bar"], period)
+    hfs = [cal_hf_series(g.sort_values("timestamp")["value"].astype(float), r["max_bar"], period)
            for _c, g in hf_src.groupby("instrumentID", sort=False)]
     hfs = [h for h in hfs if not np.isnan(h)]
     if hfs:
