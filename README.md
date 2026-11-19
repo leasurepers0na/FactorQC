@@ -107,6 +107,21 @@ LD_LIBRARY_PATH   动态库搜索路径
 
 没有 numba 时自动退回纯 numpy，行为一致。
 
+## 逐合约相关（per_inst_corr.py）
+
+把 QC 报告里 `daily_his_corr` 失败的因子按合约拆开，便于定位是“整体都错”
+还是少数合约拖低全局：
+
+```bash
+python per_inst_corr.py \
+  --daily /tmp/qc_daily/factor.20221230.csv \
+  --his   /tmp/qc_his/factor.20221230.csv \
+  --report /tmp/qc_both/qc_report.xlsx \
+  --out /tmp/per_inst_corr.csv
+```
+
+输出列：`factorName, variant, instrumentID, rows, corr`。
+
 ## 依赖
 
 ```
