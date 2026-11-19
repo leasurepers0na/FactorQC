@@ -58,6 +58,11 @@ python -m funcs.core --bunker ... --end 20221230 --mode daily --out /tmp/qc_dail
 # 复用已有回放数据，只重算报告
 python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
        --mode both --out /tmp/qc_out --skip-run
+
+# 按因子追加 daily 前摇（his 参考保持 his_start，不改 f1 公式/列）
+python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
+       --mode both --out /tmp/qc_out \
+       --prewarm-extra '{"zugzw4ng_OUTER_004_36.5.2.rcv_d_tsstd_fl2.2_15": 28000}'
 ```
 
 ## 检查项与阈值

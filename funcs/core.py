@@ -136,7 +136,7 @@ def check_csv_like(names: list[str], tstd_bar_num: int) -> list[str]:
 
 
 def make_cfg(out_dir: str, start: int, end: int, bunker: str,
-             mode: str = "his") -> str:
+             mode: str = "his", prewarm_extra: dict | None = None) -> str:
     start, end = first_trading_day(start), first_trading_day(end)
     c = json.load(open(BASE_CFG))
     c["replay"]["mode"] = mode
@@ -144,6 +144,8 @@ def make_cfg(out_dir: str, start: int, end: int, bunker: str,
     c["replay"]["replaydate"] = end
     c["factor"]["factor_export"] = out_dir.rstrip("/") + "/"
     c["factor"]["factor_bunker"] = bunker.rstrip("/") + "/"
+    if prewarm_extra:
+        c["factor"]["prewarm_extra"] = dict(prewarm_extra)
     os.makedirs(out_dir, exist_ok=True)
     p = os.path.join(FR_BIN_DIR, f"config_qcm_{mode}_{start}_{end}.json")
     json.dump(c, open(p, "w"), indent=2)
@@ -357,6 +359,8 @@ def main():
     ap.add_argument("--long-total-bar", type=int, default=-1,
                 help="长周期档位；-1 表示不检查（默认）")
     ap.add_argument("--tstd-bar-num", type=int, default=12000)
+    ap.add_argument("--prewarm-extra", default="",
+                    help='按因子追加前摇的 JSON，如 {"factor_name": 28000}')
     ap.add_argument("--out", default="/tmp/qc_out")
     ap.add_argument("--skip-run", action="store_true")
     ap.add_argument("--pool", type=int, default=1)
@@ -364,6 +368,15 @@ def main():
 
     if a.mode in ("both", "his") and a.his_start is None:
         ap.error("--mode his/both 需要 --his-start")
+
+    prewarm_extra = None
+    if a.prewarm_extra.strip():
+        try:
+            prewarm_extra = json.loads(a.prewarm_extra)
+        except json.JSONDecodeError as e:
+            ap.error(f"--prewarm-extra 不是合法 JSON: {e}")
+        if not isinstance(prewarm_extra, dict):
+            ap.error("--prewarm-extra 必须是 JSON object")
 
     f_list = [x.strip() for x in a.f_list.split(",") if x.strip()]
     os.makedirs(a.out, exist_ok=True)
@@ -392,7 +405,7 @@ def main():
         if want_daily:
             print("[3/5] daily 回放（FR mode=daily，单日）...")
             print("  rc =", run_replay(
-                make_cfg(day_dir, a.end, a.end, a.bunker, "daily"),
+                make_cfg(day_dir, a.end, a.end, a.bunker, "daily", prewarm_extra),
                 os.path.join(a.out, "daily.log")))
         else:
             print("[3/5] daily 跳过（mode=his）")
@@ -502,7 +515,7 @@ def all_check(bunker: str, end: int, his_start: int | None = None,
               f_list=None, freq: str = "1min", period: str = "normal",
               long_total_bar: int = -1, tstd_bar_num: int = 12000,
               out_dir: str = ".", skip_run: bool = False, pool: int = 1,
-              mode: str = "both"):
+              mode: str = "both", prewarm_extra: dict | None = None):
     """因子质检总入口。
 
     参数与老平台 check_future_main.py 对齐：
@@ -516,6 +529,7 @@ def all_check(bunker: str, end: int, his_start: int | None = None,
         period        'normal' or 'tick'
         long_total_bar 长周期档位；-1 表示不检查
         tstd_bar_num  tsstd 负载档位
+        prewarm_extra 按因子追加前摇的 dict，如 {"factor_name": 28000}
         out_dir       报告输出目录
         skip_run      True 表示复用已有的 his/daily 数据
     """
@@ -533,6 +547,8 @@ def all_check(bunker: str, end: int, his_start: int | None = None,
             "--f-list", ",".join(f_list) if f_list else "f0,f1"]
     if his_start is not None:
         argv += ["--his-start", str(his_start)]
+    if prewarm_extra:
+        argv += ["--prewarm-extra", json.dumps(prewarm_extra, ensure_ascii=False)]
     if skip_run:
         argv.append("--skip-run")
 
