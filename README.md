@@ -65,6 +65,10 @@ python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
        --prewarm-extra '{"zugzw4ng_OUTER_004_36.5.2.rcv_d_tsstd_fl2.2_15": 28000}'
 ```
 
+> `prewarm_extra` 会把整轮 daily 的全局前摇拉长（`BuildReplayPlan` 取所有
+> 因子的最早起点），只适合单因子/小 bunker 专项验证；不要直接塞进 200 因子
+> 全量配置。全量实测：加 `rcv_d 28000` 后 F1 60/83→59/83、整体 pass 39→34。
+
 ## 检查项与阈值
 
 | 检查 | 判定 |
