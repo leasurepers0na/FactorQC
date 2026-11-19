@@ -67,6 +67,7 @@ python -m funcs.core --bunker ... --end 20221230 --his-start 20220104 \
 | `inf_num` | == 0 |
 | `*_nan_ratio` | < 0.01（排除 SA=141 / PG=131） |
 | `wrong_*_min/max` | f1/f6：±3.01；f2/f4：±6.01 |
+| `f0_value_explosion` | 仅 f0：原始值 `max_abs > 1e7` 判失败（数值爆炸，不碰 f1） |
 | `no_duplicate` | (合约, 时刻) 不可重复 |
 | `daily_his_corr` | > 0.9999（his 裁到 daily 时间范围后 outer merge 的 Pearson） |
 | `hf` | `floor(param/3) <= hf <= ceil(param*3)`；hf 取 daily（无 daily 才退回 his） |

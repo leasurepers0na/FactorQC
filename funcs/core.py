@@ -62,6 +62,7 @@ ENV = {
 # ── 阈值（来自老平台 standard.txt）──
 NAN_RATIO_MAX = 0.01
 ABS_MAX = 3.01
+F0_ABS_MAX = 1e7   # f0 原始值爆炸阈值（如 m5m_rsi 出现 1e18；volume 类 ~1e6 不误伤）
 CORR_MIN = 0.9999
 HF_RATIO = {"normal": (1 / 3, 3.0), "tick": (1 / 6, 1.5)}
 LONG_TOTAL_LIMIT = {0: 12000, 1: 18000, 2: 24000, 3: 42000, 4: 60000}
@@ -278,6 +279,7 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
         return r
 
     # ── 基础统计 ──
+    f0_max_abs = np.nan
     vv = base["value"]
     r["条数"] = len(vv)
     r["inf_num"] = int(np.isinf(vv).sum())
@@ -286,6 +288,7 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
     if len(fin):
         r["min"] = float(fin.min())
         r["max"] = float(fin.max())
+        f0_max_abs = float(np.abs(fin).max())
 
     # ── hf（老平台口径：用 daily；daily 缺失才退回 his）──
     hf_src = daily if not daily.empty else his
@@ -320,6 +323,8 @@ def check_factor(name: str, his: pd.DataFrame, daily: pd.DataFrame,
             fails.append("wrong_min")
         if not np.isnan(r["max"]) and r["max"] > ABS_MAX:
             fails.append("wrong_max")
+    if v == "f0" and not np.isnan(f0_max_abs) and f0_max_abs > F0_ABS_MAX:
+        fails.append("f0_value_explosion")
     if not np.isnan(r["hf_ratio"]):
         lo, hi = HF_RATIO[period]
         if not (lo <= r["hf_ratio"] <= hi):
